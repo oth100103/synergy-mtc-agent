@@ -1,0 +1,44 @@
+# UnderCover auf Coolify: Backend, Agent-Service und Dashboard.
+# Die Werte ${...} trägst du in Coolify unter "Environment Variables" ein.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/python.Dockerfile
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
+      UNDERCOVER_AGENT: http://agent:8002
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: deploy/python.Dockerfile
+    command: uvicorn agent.service:app --host 0.0.0.0 --port 8002
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
+      UNDERCOVER_API: http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: deploy/dashboard.Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
+    depends_on:
+      - backend
+    restart: unless-stopped

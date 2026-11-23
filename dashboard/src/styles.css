@@ -1,29 +1,29 @@
 :root {
-  --sea-green: #06d6a0;
-  --marigold: #ffc145;
-  --coral: #f78c6b;
-  --cerulean: #118ab2;
-  --raspberry: #ef476f;
-  --midnight: #073b4c;
-  --sea-mist: #cdd8db;
+  --sea-green: #1fa2a6; /* Synergy Petrol */
+  --marigold: #f4b942; /* Synergy Amber */
+  --coral: #e07a5f; /* Synergy Terracotta */
+  --cerulean: #3d7ebf; /* Synergy Steel Blue */
+  --raspberry: #d64550; /* Synergy Crimson */
+  --midnight: #12263f; /* Synergy Navy */
+  --sea-mist: #d5dee8;
 
   /* Each color for light mode, then dark mode. */
-  --page: light-dark(#f0f4f5, #04232e);
+  --page: light-dark(#f3f5f8, #0b1624);
   --panel: light-dark(#ffffff, #000000);
-  --inset: light-dark(#f4f7f8, #0a1d24);
+  --inset: light-dark(#f5f7fa, #101e30);
   --ink: light-dark(var(--midnight), var(--sea-mist));
-  --muted: light-dark(#4b6f7b, #93aab1);
-  --link: light-dark(#0b6e8f, #6fcbe8);
-  --green-text: light-dark(#037a5b, #6ff0c9);
-  --red-text: light-dark(#b8204a, #ff8fa8);
-  --disabled-surface: light-dark(#e3eaec, #163640);
-  --disabled-ink: light-dark(#7a949c, #6f8a92);
+  --muted: light-dark(#4f6178, #9aaabd);
+  --link: light-dark(#1d6fa5, #7cc0ef);
+  --green-text: light-dark(#0f7a7d, #6fe0dc);
+  --red-text: light-dark(#b02a37, #ff8f99);
+  --disabled-surface: light-dark(#e2e7ee, #1c2c40);
+  --disabled-ink: light-dark(#7b8aa0, #6d7f96);
   /* The header's band, darker than the page in both modes, and a menu raised
      above the page. */
   --header: light-dark(var(--midnight), #000000);
   --on-header: #ffffff;
-  --raised: light-dark(#ffffff, #0b2c37);
-  --shadow: light-dark(rgb(7 59 76 / 0.07), rgb(0 0 0 / 0.5));
+  --raised: light-dark(#ffffff, #16263a);
+  --shadow: light-dark(rgb(18 38 63 / 0.07), rgb(0 0 0 / 0.5));
   --sans: "Instrument Sans", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
 

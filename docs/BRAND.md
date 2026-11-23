@@ -1,5 +1,7 @@
 # Brand
 
+The product is shown to customers as **Synergy MTC Agent**, a demo by Synergy MTC.
+
 ## Fonts
 
 From Google Fonts:
@@ -10,24 +12,24 @@ From Google Fonts:
 
 ## Colors
 
-- **Primary**: Sea Green `#06D6A0`, Midnight text
-- **Secondary**: Marigold `#FFC145`, Midnight text
-- **Tertiary**: Coral `#F78C6B`, Midnight text
-- **Information**: Cerulean `#118AB2`, white text
-- **Highlight or alert**: Raspberry `#EF476F`, white text
-- **Ink on light backgrounds**: Midnight `#073B4C`
-- **Ink on dark backgrounds**: Sea Mist `#CDD8DB`
+- **Primary**: Petrol `#1FA2A6`, Navy text
+- **Secondary**: Amber `#F4B942`, Navy text
+- **Tertiary**: Terracotta `#E07A5F`, Navy text
+- **Information**: Steel Blue `#3D7EBF`, white text
+- **Highlight or alert**: Crimson `#D64550`, white text
+- **Ink on light backgrounds**: Navy `#12263F`
+- **Ink on dark backgrounds**: Mist `#D5DEE8`
 
-Use Sea Green, Marigold and Coral when three things sit side by side, such as a claim's states or chart series. Add Cerulean fourth and Raspberry fifth.
+Use Petrol, Amber and Terracotta when three things sit side by side, such as a claim's states or chart series. Add Steel Blue fourth and Crimson fifth.
 
 ## Surfaces
 
-- **Light mode**: page background `#F0F4F5`, white panels and cards
-- **Dark mode**: page background `#04232E`, black panels and cards
+- **Light mode**: page background `#F3F5F8`, white panels and cards
+- **Dark mode**: page background `#0B1624`, black panels and cards
 
-Panels are rounded with no outline, and a faint shadow. Sea Green and Marigold are too bright for small text, so darken them for headings and body text on light backgrounds and lighten them on dark ones.
+Panels are rounded with no outline, and a faint shadow. Petrol and Amber are too bright for small text, so darken them for headings and body text on light backgrounds and lighten them on dark ones.
 
-The header is a band of Midnight across the top of the page (black in dark mode), with white text and the brand's mark, a shield with a check, in Sea Green.
+The header is a band of Navy across the top of the page (black in dark mode), with white text and the brand's mark, a Lucide Sparkles icon, in Petrol, until the Synergy MTC logo replaces it.
 
 ## Icons
 

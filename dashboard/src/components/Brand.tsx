@@ -1,12 +1,12 @@
-import { ShieldCheck } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
-// UnderCover's mark, name and the dashboard's tagline, as the header and the
+// Synergy MTC Agent's mark, name and the dashboard's tagline, as the header and the
 // sign-in page show them.
 export function Brand() {
   return (
     <>
-      <ShieldCheck />
-      UnderCover <span className="tagline">claims</span>
+      <Sparkles />
+      Synergy MTC <span className="tagline">Agent</span>
     </>
   );
 }

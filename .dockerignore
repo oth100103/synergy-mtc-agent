@@ -1,0 +1,10 @@
+node_modules
+.venv
+.env
+labs
+community_contributions
+e2e
+coverage
+dashboard/coverage
+**/__pycache__
+undercover.db
