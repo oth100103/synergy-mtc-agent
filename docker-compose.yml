@@ -1,4 +1,4 @@
-# UnderCover auf Coolify: Backend, Agent-Service und Dashboard.
+# UnderCover auf Coolify: Backend, Agent-Service, Context Layer und Dashboard.
 # Die Werte ${...} trägst du in Coolify unter "Environment Variables" ein.
 services:
   backend:
@@ -14,6 +14,7 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
       UNDERCOVER_AGENT: http://agent:8002
+      UNDERCOVER_API_KEY: ${UNDERCOVER_API_KEY}
     restart: unless-stopped
 
   agent:
@@ -28,8 +29,20 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
       UNDERCOVER_API: http://backend:8000
+      UNDERCOVER_API_KEY: ${UNDERCOVER_API_KEY}
+      # Kein Gateway gesetzt: der Agent nutzt den Direct-Modus mit dem Context Layer
+      UNDERCOVER_CONTEXT: http://context:8006/mcp
     depends_on:
       - backend
+      - context
+    restart: unless-stopped
+
+  context:
+    # Context Layer als MCP-Server, nur intern erreichbar (keine Domain vergeben)
+    build:
+      context: .
+      dockerfile: deploy/python.Dockerfile
+    command: python -m deploy.context_server
     restart: unless-stopped
 
   dashboard:

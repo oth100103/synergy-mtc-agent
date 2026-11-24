@@ -1,4 +1,4 @@
-# Backend und Agent-Service von UnderCover (Python 3.12 mit uv)
+# Backend, Agent-Service und Context Layer von UnderCover (Python 3.12 mit uv)
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
@@ -8,6 +8,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Dann den Code
 COPY backend ./backend
 COPY agent ./agent
+COPY context ./context
+COPY deploy/context_server.py ./deploy/context_server.py
 COPY data ./data
 COPY api_rules.py ./
 RUN uv sync --frozen --no-dev
