@@ -19,6 +19,7 @@ from backend.calculation import (
 from backend.configuration import router as configuration
 from backend.copilot import router as copilot
 from backend.customers import router as customers_router
+from backend.demo_reset import router as demo_reset
 from backend.database import (
     claim_view,
     claims,
@@ -115,6 +116,7 @@ app.include_router(configuration)
 app.include_router(improvement)
 app.include_router(copilot)
 app.include_router(customers_router)
+app.include_router(demo_reset)
 
 SignsOffOverTheLimit = Annotated[Handler, Depends(senior("sign this off"))]
 SendsBack = Annotated[Handler, Depends(senior("send this back"))]

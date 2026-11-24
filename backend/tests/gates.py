@@ -65,6 +65,7 @@ HANDLER_OPERATIONS = {
     "get_version_details": ("GET", "/api/configuration/versions/1", None),
     "get_settings": ("GET", "/api/settings", None),
     "change_settings": ("PUT", "/api/settings", STARTING),
+    "reset_demo": ("POST", "/api/demo/reset", None),
     "get_latest_dispatch": ("GET", "/api/dispatches/latest", None),
     "start_dispatch": ("POST", "/api/dispatches", {"agents": 3}),
     "list_evaluations": ("GET", "/api/evaluations", None),

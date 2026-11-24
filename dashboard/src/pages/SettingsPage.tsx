@@ -1,4 +1,11 @@
-import { Monitor, Moon, Save, Sun, type LucideIcon } from "lucide-react";
+import {
+  Monitor,
+  Moon,
+  RotateCcw,
+  Save,
+  Sun,
+  type LucideIcon,
+} from "lucide-react";
 import { useId, useState } from "react";
 import {
   api,
@@ -79,6 +86,7 @@ function SettingsPanels({
       )}
       <Changes changes={page.changes} />
       <ModelsAllowed models={page.models_allowed} />
+      {handler.can_approve_over_limit && <DemoDataReset />}
       <AppearanceChoice />
     </div>
   );
@@ -294,6 +302,62 @@ function ModelsAllowed({ models }: Readonly<{ models: ModelAllowed[] }>) {
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+// Synergy MTC: puts the demo data back as it was seeded, before a demo for a
+// customer. The server says no unless it has the reset switched on.
+function DemoDataReset() {
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState<string>();
+  const reset = useAction(() =>
+    api.resetDemo().then((data) => {
+      setDone(
+        `The demo data is back as seeded, with ${String(data.claims)} claims.`,
+      );
+    }),
+  );
+  return (
+    <section className="panel" aria-labelledby="demo-reset-title">
+      <h2 id="demo-reset-title">Demo data</h2>
+      <p className="muted small">
+        Puts every claim, run, round and conversation back as it was seeded,
+        ready for the next demo.
+      </p>
+      <div className="settings-bar">
+        <p className="muted small">{done ?? ""}</p>
+        <button
+          type="button"
+          className="button"
+          disabled={reset.sending}
+          onClick={() => {
+            setDone(undefined);
+            setConfirming(true);
+          }}
+        >
+          <RotateCcw />
+          {reset.sending ? "Resetting…" : "Reset the demo data"}
+        </button>
+      </div>
+      {reset.error && <FormError>{reset.error}</FormError>}
+      <ConfirmDialog
+        open={confirming}
+        title="Reset the demo data?"
+        confirmLabel="Reset the demo data"
+        onConfirm={() => {
+          setConfirming(false);
+          void reset.run();
+        }}
+        onCancel={() => {
+          setConfirming(false);
+        }}
+      >
+        <p>
+          Every decision, payment, run and Copilot conversation since the last
+          reset is deleted. This can't be undone.
+        </p>
+      </ConfirmDialog>
     </section>
   );
 }

@@ -277,6 +277,13 @@ export interface ScoredEvaluation extends Evaluation {
   claims: ScoredClaim[];
 }
 
+// Synergy MTC: what the demo data holds after a reset.
+export interface DemoReset {
+  claims: number;
+  customers: number;
+  policies: number;
+}
+
 export interface Accepted {
   status: "accepted";
 }
@@ -540,6 +547,7 @@ export const api = {
       `${IMPROVEMENT}/recipes/${encodeURIComponent(number)}`,
     ),
   startRound: () => post<Accepted>(ROUNDS),
+  resetDemo: () => post<DemoReset>("/api/demo/reset"),
   stopRound: (roundId: string) =>
     post<RoundSummary>(`${roundPath(roundId)}/stop`),
   approveProposal: (roundId: string, proposalId: string) =>
