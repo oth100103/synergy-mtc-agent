@@ -3,12 +3,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException
+from mangum import Mangum
 from sqlalchemy import Connection, RowMapping, insert, select, update
 
-from backend import agent_service
+from backend import agent_api, dashboard
+from backend.calculation import attempts_calculation, keep_calculation
 from backend.configuration import router as configuration
 from backend.database import (
     claim_view,
@@ -27,8 +29,15 @@ from backend.database import (
     steps,
     work_times,
 )
-from backend.dependencies import Database, SignedIn, senior
-from backend.documents import search, sections, titles
+from backend.dependencies import (
+    AgentKey,
+    Database,
+    HandlerOrAgent,
+    SignedIn,
+    SignedInHandler,
+    senior,
+)
+from backend.documents import manual_version
 from backend.improvement import router as improvement
 from backend.lookups import CLAIM_NOT_FOUND, current_settings, run_row
 from backend.models import (
@@ -36,9 +45,9 @@ from backend.models import (
     ClaimSummary,
     DecisionKind,
     DecisionRequest,
-    DocumentName,
     FailureRequest,
     Handler,
+    HoldRequest,
     ModelCall,
     ModelCallRequest,
     PaymentRequest,
@@ -47,8 +56,6 @@ from backend.models import (
     Plans,
     Policy,
     PreviousClaim,
-    Section,
-    SectionMatch,
     StartRequest,
     Status,
     Step,
@@ -58,11 +65,17 @@ from backend.models import (
 )
 from backend.money import dollars
 from backend.payout import needs_sign_off, work_out_payout
+from backend.records import check_calculation, check_request
 from backend.round_state import round_row, why_no_claim_starts
 from backend.runs import router as runs
 from backend.views import to_claim, to_summary
 
 ATTEMPTS = 2
+NOT_APPROVED = "Claim {claim_id} has not been approved"
+ALREADY_PAID = "Claim {claim_id} has already been paid"
+NOT_STARTED = "Claim {claim_id} has not been started"
+NOT_IN_PROGRESS = "Claim {claim_id} is not in progress"
+ALREADY_DECIDED = "Claim {claim_id} has already been decided"
 
 
 @asynccontextmanager
@@ -110,6 +123,22 @@ def find_policy(db: Connection, policy_id: str) -> Policy:
     return Policy(**record)
 
 
+def over_the_limit(limit: float) -> str:
+    """Say that a payout over a limit needs a handler's sign-off."""
+    return f"A payout over {dollars(limit)} needs a handler's sign-off"
+
+
+def record_payment(db: Connection, claim: RowMapping) -> None:
+    """Pay an approved claim its payout, which decides it."""
+    claim_id = claim["claim_id"]
+    db.execute(
+        insert(payments).values(
+            claim_id=claim_id, amount=claim["payout"], paid_at=now()
+        )
+    )
+    set_status(db, claim_id, Status.DECIDED)
+
+
 def set_status(db: Connection, claim_id: str, status: Status) -> None:
     """Move a claim to a new status."""
     db.execute(
@@ -121,7 +150,7 @@ def started_thread(db: Connection, claim_id: str) -> str:
     """Return the thread of a claim that has been started, or raise a 404 or a 409."""
     thread_id = find_claim(db, claim_id)["thread_id"]
     if thread_id is None:
-        raise HTTPException(409, f"Claim {claim_id} has not been started")
+        raise HTTPException(409, NOT_STARTED.format(claim_id=claim_id))
     return thread_id
 
 
@@ -142,17 +171,14 @@ def check_run(db: Connection, run_id: str | None) -> None:
         run_row(db, run_id)
 
 
-def add_step(
-    db: Connection, claim_id: str, thread_id: str, kind: str, content: str
-) -> Step:
+def add_step(db: Connection, claim_id: str, thread_id: str, step: StepRequest) -> Step:
     """Add one step of the agent's work to a claim."""
     query = (
         insert(steps)
         .values(
             claim_id=claim_id,
             thread_id=thread_id,
-            kind=kind,
-            content=content,
+            **step.model_dump(),
             created_at=now(),
         )
         .returning(steps)
@@ -166,7 +192,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/claims", operation_id="list_claims")
+@app.get("/api/claims", operation_id="list_claims", dependencies=[HandlerOrAgent])
 def list_claims(db: Database) -> list[ClaimSummary]:
     """List every claim in the queue, in id order, leaving out evaluations' copies."""
     query = claim_view.where(claims.c.evaluation_id.is_(None))
@@ -174,19 +200,29 @@ def list_claims(db: Database) -> list[ClaimSummary]:
     return [to_summary(row) for row in rows]
 
 
-@app.get("/api/claims/{claim_id}", operation_id="get_claim")
+@app.get(
+    "/api/claims/{claim_id}", operation_id="get_claim", dependencies=[HandlerOrAgent]
+)
 def get_claim(claim_id: str, db: Database) -> Claim:
     """Get one claim in full: the story, the items claimed and the documents."""
     return to_claim(find_claim(db, claim_id))
 
 
-@app.get("/api/policies/{policy_id}", operation_id="get_policy")
+@app.get(
+    "/api/policies/{policy_id}",
+    operation_id="get_policy",
+    dependencies=[HandlerOrAgent],
+)
 def get_policy(policy_id: str, db: Database) -> Policy:
     """Get a policy: the plan, add-ons, purchase date, trip and travelers."""
     return find_policy(db, policy_id)
 
 
-@app.get("/api/customers/{customer_id}/claims", operation_id="get_claim_history")
+@app.get(
+    "/api/customers/{customer_id}/claims",
+    operation_id="get_claim_history",
+    dependencies=[HandlerOrAgent],
+)
 def get_claim_history(customer_id: str, db: Database) -> list[PreviousClaim]:
     """Get a customer's earlier claims, with the outcome and the amount paid."""
     query = select(customers.c.record).where(customers.c.customer_id == customer_id)
@@ -196,22 +232,14 @@ def get_claim_history(customer_id: str, db: Database) -> list[PreviousClaim]:
     return [PreviousClaim(**claim) for claim in record["previous_claims"]]
 
 
-@app.get("/api/documents/search", operation_id="search_documents")
-def search_documents(
-    query: Annotated[str, Query(min_length=1)], db: Database
-) -> list[SectionMatch]:
-    """Find the sections of the wording and the manual that mention a word or phrase."""
-    return search(db, query)
-
-
-@app.get("/api/documents/{document}/sections/{number}", operation_id="read_section")
-def read_section(document: DocumentName, number: int, db: Database) -> Section:
-    """Read one section of the policy wording or the claims manual in full."""
-    for section in sections(db, document):
-        if section.number == number:
-            return section
-    title = titles(db)[document].lower()
-    raise HTTPException(404, f"Section {number} of the {title} not found")
+@app.get(
+    "/api/agent/openapi.json",
+    operation_id="get_agent_api",
+    dependencies=[HandlerOrAgent],
+)
+def get_agent_api() -> dict[str, Any]:
+    """Get the OpenAPI document of the claim agent's own operations, for the Gateway."""
+    return agent_api.document(app)
 
 
 @app.get("/api/me", operation_id="get_signed_in_handler")
@@ -220,7 +248,9 @@ def get_signed_in_handler(handler: SignedIn) -> Handler:
     return handler
 
 
-@app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
+@app.post(
+    "/api/claims/{claim_id}/start", operation_id="start_claim", dependencies=[AgentKey]
+)
 def start_claim(claim_id: str, request: StartRequest, db: Database) -> Claim:
     """Start work on a waiting claim, which moves it to in progress."""
     claim = find_claim(db, claim_id)
@@ -240,14 +270,20 @@ def start_claim(claim_id: str, request: StartRequest, db: Database) -> Claim:
     return to_claim(find_claim(db, claim_id))
 
 
-@app.post("/api/claims/{claim_id}/steps", operation_id="record_step")
+@app.post(
+    "/api/claims/{claim_id}/steps", operation_id="record_step", dependencies=[AgentKey]
+)
 def record_step(claim_id: str, request: StepRequest, db: Database) -> Step:
     """Record one step of the agent's work on a claim."""
     thread_id = started_thread(db, claim_id)
-    return add_step(db, claim_id, thread_id, request.kind, request.content)
+    return add_step(db, claim_id, thread_id, request)
 
 
-@app.post("/api/claims/{claim_id}/model-calls", operation_id="record_model_call")
+@app.post(
+    "/api/claims/{claim_id}/model-calls",
+    operation_id="record_model_call",
+    dependencies=[AgentKey],
+)
 def record_model_call(
     claim_id: str, request: ModelCallRequest, db: Database
 ) -> ModelCall:
@@ -267,7 +303,11 @@ def record_model_call(
     return ModelCall(**db.execute(query).mappings().one())
 
 
-@app.post("/api/claims/{claim_id}/work-times", operation_id="record_work_time")
+@app.post(
+    "/api/claims/{claim_id}/work-times",
+    operation_id="record_work_time",
+    dependencies=[AgentKey],
+)
 def record_work_time(claim_id: str, request: WorkTimeRequest, db: Database) -> WorkTime:
     """Record one spell of the agent's work on a started claim, ending now."""
     thread_id = started_thread(db, claim_id)
@@ -287,7 +327,11 @@ def record_work_time(claim_id: str, request: WorkTimeRequest, db: Database) -> W
     return WorkTime(**db.execute(query).mappings().one())
 
 
-@app.get("/api/claims/{claim_id}/steps", operation_id="list_steps")
+@app.get(
+    "/api/claims/{claim_id}/steps",
+    operation_id="list_steps",
+    dependencies=[SignedInHandler],
+)
 def list_steps(claim_id: str, db: Database) -> list[Step]:
     """List the steps of the agent's work on a claim, in order."""
     find_claim(db, claim_id)
@@ -295,17 +339,25 @@ def list_steps(claim_id: str, db: Database) -> list[Step]:
     return [Step(**row) for row in db.execute(query).mappings()]
 
 
-@app.post("/api/claims/{claim_id}/decision", operation_id="record_decision")
+@app.post(
+    "/api/claims/{claim_id}/decision",
+    operation_id="record_decision",
+    dependencies=[AgentKey],
+)
 def record_decision(claim_id: str, request: DecisionRequest, db: Database) -> Claim:
-    """Record a claim's decision once; an approval waits to be paid or signed off."""
+    """Record a claim's decision once, as section 14 asks; approvals await payment."""
+    check_request(request)
     claim = find_claim(db, claim_id)
-    payout = round(request.payout, 2)
+    payout = request.payout
     if claim["decision"] is not None:
         if (claim["decision"], claim["payout"]) == (request.decision, payout):
             return to_claim(claim)
-        raise HTTPException(409, f"Claim {claim_id} has already been decided")
+        raise HTTPException(409, ALREADY_DECIDED.format(claim_id=claim_id))
     if claim["status"] != Status.IN_PROGRESS:
-        raise HTTPException(409, f"Claim {claim_id} is not in progress")
+        raise HTTPException(409, NOT_IN_PROGRESS.format(claim_id=claim_id))
+    calculation = None
+    if request.decision == DecisionKind.APPROVE:
+        calculation = check_calculation(payout, attempts_calculation(db, claim))
     limit = approval_limit(db)
     db.execute(
         insert(decisions).values(
@@ -314,7 +366,10 @@ def record_decision(claim_id: str, request: DecisionRequest, db: Database) -> Cl
             payout=payout,
             section=request.section,
             reason=request.reason,
+            decided_by=request.decided_by,
             decided_at=now(),
+            manual_version=manual_version(db),
+            calculation=calculation and calculation.model_dump(),
             approval_limit=limit,
         )
     )
@@ -325,51 +380,74 @@ def record_decision(claim_id: str, request: DecisionRequest, db: Database) -> Cl
     return to_claim(find_claim(db, claim_id))
 
 
-@app.post("/api/claims/{claim_id}/payout", operation_id="calculate_payout")
+@app.post(
+    "/api/claims/{claim_id}/payout",
+    operation_id="calculate_payout",
+    dependencies=[AgentKey],
+)
 def calculate_payout(claim_id: str, request: PayoutRequest, db: Database) -> Payout:
-    """Work out an approval's payout with UnderCover's payout rules; records nothing."""
-    policy = find_policy(db, to_claim(find_claim(db, claim_id)).policy_id)
-    return work_out_payout(policy, plans(db), request, approval_limit(db))
+    """Work out and keep an approval's payout with UnderCover's payout rules."""
+    claim = to_claim(find_claim(db, claim_id))
+    if claim.thread_id is None:
+        raise HTTPException(409, NOT_STARTED.format(claim_id=claim_id))
+    if claim.status != Status.IN_PROGRESS:
+        raise HTTPException(409, NOT_IN_PROGRESS.format(claim_id=claim_id))
+    policy = find_policy(db, claim.policy_id)
+    payout = work_out_payout(policy, plans(db), request, approval_limit(db))
+    keep_calculation(db, claim_id, claim.thread_id, payout)
+    return payout
 
 
-@app.post("/api/claims/{claim_id}/payment", operation_id="pay_claim")
+@app.post(
+    "/api/claims/{claim_id}/payment", operation_id="pay_claim", dependencies=[AgentKey]
+)
 def pay_claim(claim_id: str, request: PaymentRequest, db: Database) -> Claim:
-    """Pay an approved claim its payout once, unless it needs a handler's sign-off."""
+    """Pay an approved claim its payout once, unless it is over the limit."""
+    amount = round(request.amount, 2)
+    limit = approval_limit(db)
+    if needs_sign_off(amount, limit):
+        raise HTTPException(403, over_the_limit(limit))
     claim = find_claim(db, claim_id)
     if claim["decision"] != DecisionKind.APPROVE:
-        raise HTTPException(409, f"Claim {claim_id} has not been approved")
-    amount = round(request.amount, 2)
+        raise HTTPException(409, NOT_APPROVED.format(claim_id=claim_id))
     if claim["paid_at"] is not None:
         if amount == claim["amount"]:
             return to_claim(claim)
-        raise HTTPException(409, f"Claim {claim_id} has already been paid")
+        raise HTTPException(409, ALREADY_PAID.format(claim_id=claim_id))
     if claim["status"] == Status.WAITING_FOR_SIGN_OFF:
-        raise HTTPException(
-            403,
-            f"A payout over {dollars(claim['approval_limit'])} needs a handler's "
-            "sign-off",
-        )
+        raise HTTPException(403, over_the_limit(claim["approval_limit"]))
     if amount != claim["payout"]:
         raise HTTPException(
             422, f"The amount must be the approved payout of {dollars(claim['payout'])}"
         )
+    record_payment(db, claim)
+    return to_claim(find_claim(db, claim_id))
+
+
+@app.post(
+    "/api/claims/{claim_id}/hold", operation_id="hold_payment", dependencies=[AgentKey]
+)
+def hold_payment(claim_id: str, request: HoldRequest, db: Database) -> Claim:
+    """Hold an approval the Gateway refused to pay for a handler's sign-off."""
+    claim = find_claim(db, claim_id)
+    if claim["decision"] != DecisionKind.APPROVE:
+        raise HTTPException(409, NOT_APPROVED.format(claim_id=claim_id))
+    if claim["paid_at"] is not None:
+        raise HTTPException(409, ALREADY_PAID.format(claim_id=claim_id))
+    if claim["status"] == Status.WAITING_FOR_SIGN_OFF:
+        return to_claim(claim)
     db.execute(
-        insert(payments).values(
-            claim_id=claim_id, amount=claim["payout"], paid_at=now()
-        )
+        update(decisions)
+        .where(decisions.c.claim_id == claim_id)
+        .values(gateway_refusal=request.reason)
     )
-    set_status(db, claim_id, Status.DECIDED)
+    set_status(db, claim_id, Status.WAITING_FOR_SIGN_OFF)
     return to_claim(find_claim(db, claim_id))
 
 
 @app.post("/api/claims/{claim_id}/sign-off", operation_id="sign_off_claim")
-def sign_off_claim(
-    claim_id: str,
-    handler: SignsOffOverTheLimit,
-    db: Database,
-    background: BackgroundTasks,
-) -> Claim:
-    """Sign off a held payout as the handler signed in, so the agent pays it."""
+def sign_off_claim(claim_id: str, handler: SignsOffOverTheLimit, db: Database) -> Claim:
+    """Sign off a held payout as the handler signed in, which pays it."""
     claim = find_claim(db, claim_id)
     if claim["evaluation_id"] is not None:
         raise HTTPException(
@@ -382,22 +460,31 @@ def sign_off_claim(
         .where(decisions.c.claim_id == claim_id)
         .values(signed_off_by=handler.name, signed_off_at=now())
     )
-    set_status(db, claim_id, Status.IN_PROGRESS)
-    background.add_task(agent_service.resume_claim, claim_id)
+    record_payment(db, claim)
     return to_claim(find_claim(db, claim_id))
 
 
-@app.post("/api/claims/{claim_id}/failure", operation_id="fail_claim")
+@app.post(
+    "/api/claims/{claim_id}/failure", operation_id="fail_claim", dependencies=[AgentKey]
+)
 def fail_claim(claim_id: str, request: FailureRequest, db: Database) -> Claim:
     """Put a failed claim back in the queue, or leave it for a handler after two."""
     claim = find_claim(db, claim_id)
     if claim["status"] != Status.IN_PROGRESS:
-        raise HTTPException(409, f"Claim {claim_id} is not in progress")
+        raise HTTPException(409, NOT_IN_PROGRESS.format(claim_id=claim_id))
     if claim["decision"] is not None:
-        raise HTTPException(409, f"Claim {claim_id} has already been decided")
-    add_step(db, claim_id, claim["thread_id"], "error", request.reason)
+        raise HTTPException(409, ALREADY_DECIDED.format(claim_id=claim_id))
+    error = StepRequest(kind="error", content=request.reason, sources=[])
+    add_step(db, claim_id, claim["thread_id"], error)
     status = (
         Status.LEFT_FOR_HANDLER if claim["attempts"] >= ATTEMPTS else Status.WAITING
     )
     set_status(db, claim_id, status)
     return to_claim(find_claim(db, claim_id))
+
+
+# After every route, so the dashboard's build only answers what no route does.
+app.router.routes.append(dashboard.mount)
+
+# AWS Lambda's entry point. Nothing seeds the database there.
+handler = Mangum(app, lifespan="off")
