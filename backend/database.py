@@ -24,6 +24,7 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    UniqueConstraint,
     create_engine,
     insert,
     inspect,
@@ -147,6 +148,8 @@ claims = Table(
     Column("attempts", Integer, nullable=False),
     Column("evaluation_id", Text, ForeignKey("runs.run_id")),
     Column("copy_of", Text),
+    # When the agent last said a resume was working on the claim.
+    Column("resume_heard_at", Text),
 )
 held_out_claims = Table(
     "held_out_claims",
@@ -185,6 +188,26 @@ decisions = Table(
     Column("signed_off_at", Text),
     # Why the Gateway refused to pay an approval, which then waits for sign-off.
     Column("gateway_refusal", Text),
+)
+# The decisions handlers sent back to the agent, each with its note, who sent it
+# back and when.
+sent_back_decisions = Table(
+    "sent_back_decisions",
+    metadata,
+    Column("sent_back_id", Integer, primary_key=True),
+    Column("claim_id", Text, ForeignKey("claims.claim_id"), nullable=False),
+    Column("decision", Text, nullable=False),
+    Column("payout", Float, nullable=False),
+    Column("calculation", JSON),
+    Column("section", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decided_by", Text, nullable=False),
+    Column("decided_at", Text, nullable=False),
+    Column("manual_version", Text, nullable=False),
+    Column("gateway_refusal", Text),
+    Column("note", Text, nullable=False),
+    Column("sent_back_by", Text, nullable=False),
+    Column("sent_back_at", Text, nullable=False),
 )
 # Each claim's latest calculation of its payout, on the thread of the attempt it was
 # made in, which an approval in that attempt must match.
@@ -239,6 +262,9 @@ rounds = Table(
     Column("stopped_because", Text),
     Column("held_out_before", JSON),
     Column("held_out_after", JSON),
+    # When the app last heard of the round's work: as it started the round or
+    # recorded a review, or from the agent's heartbeat.
+    Column("heard_at", Text),
 )
 recipes = Table(
     "recipes",
@@ -311,7 +337,20 @@ runs = Table(
     Column("started_at", Text, nullable=False),
     Column("finished_at", Text),
     Column("summary", JSON),
+    Column("stopped_because", Text),
+    # When the app last heard of the run's work: as it created the run, or from
+    # the agent's heartbeat.
+    Column("heard_at", Text),
 )
+# One row, which a start of the agent's work updates first in its transaction, so
+# two starts at the same moment take turns.
+locks = Table(
+    "locks",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("taken_at", Text),
+)
+AGENTS_WORK = "the agent's work"
 # The judge's grade of each copy in an evaluation, empty when it couldn't grade it.
 grades = Table(
     "grades",
@@ -356,6 +395,73 @@ work_times = Table(
 )
 
 
+# The Copilot's conversations, each its handler's, with how many turns it has, which
+# a new turn moves on from n to n + 1 with a conditional update, so a conversation
+# takes one message at a time.
+conversations = Table(
+    "conversations",
+    metadata,
+    Column("conversation_id", Text, primary_key=True),
+    Column("handler_id", Text, ForeignKey("handlers.handler_id"), nullable=False),
+    Column("title", Text, nullable=False),
+    Column("turns", Integer, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+# Each message to the Copilot and its answer: where the turn stands, how it ended,
+# and the card of a sign-off waiting for the handler's confirmation, with the held
+# decision's decided_at, and the handler's answer.
+copilot_turns = Table(
+    "copilot_turns",
+    metadata,
+    Column("turn_id", Text, primary_key=True),
+    Column(
+        "conversation_id",
+        Text,
+        ForeignKey("conversations.conversation_id"),
+        nullable=False,
+    ),
+    Column("number", Integer, nullable=False),
+    Column("message", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("started_at", Text, nullable=False),
+    Column("paused_at", Text),
+    Column("answered_at", Text),
+    Column("finished_at", Text),
+    Column("answer", Text),
+    Column("model_calls", Integer),
+    Column("cost", Float),
+    Column("failure", Text),
+    Column("confirmation", JSON),
+    Column("confirmation_answer", Text),
+    Column("canceled_because", Text),
+    UniqueConstraint("conversation_id", "number"),
+)
+# The cards of a turn: each tool the Copilot called, what was asked and what came
+# back.
+copilot_steps = Table(
+    "copilot_steps",
+    metadata,
+    Column("step_id", Integer, primary_key=True),
+    Column(
+        "turn_id",
+        Text,
+        ForeignKey("copilot_turns.turn_id"),
+        nullable=False,
+        index=True,
+    ),
+    Column("tool", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("input", Text, nullable=False),
+    Column("asked", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("answer", Text),
+    Column("reason", Text),
+    Column("sources", JSON, nullable=False),
+    Column("started_at", Text, nullable=False),
+    Column("finished_at", Text),
+)
+
+
 class LabeledSet(NamedTuple):
     """A set of claims our handlers have decided: the table its claims are kept in,
     and the file in data/evals/ with the handlers' decisions, which only seeding
@@ -381,6 +487,7 @@ claim_view = (
         claims.c.attempts,
         claims.c.evaluation_id,
         claims.c.copy_of,
+        claims.c.resume_heard_at,
         customers.c.name.label("customer_name"),
         decisions.c.decision,
         decisions.c.payout,
@@ -411,6 +518,17 @@ def stamp(moment: datetime) -> str:
 def now() -> str:
     """Return the current time in UTC, to the second."""
     return stamp(datetime.now(UTC))
+
+
+def stamp_precisely(moment: datetime) -> str:
+    """Write a moment in UTC to the millisecond, as the Copilot's turns and cards
+    have it, since many of them take less than a second."""
+    return moment.isoformat(timespec="milliseconds")
+
+
+def now_precisely() -> str:
+    """Return the current time in UTC, to the millisecond."""
+    return stamp_precisely(datetime.now(UTC))
 
 
 def database_url() -> URL:
@@ -542,6 +660,7 @@ def seed(db: Engine) -> dict[str, int]:
         connection.execute(insert(claims), [waiting_claim(c) for c in claim_rows])
         seed_first_version(connection)
         connection.execute(insert(recipes).values(**FIRST_RECIPE, created_at=now()))
+        connection.execute(insert(locks).values(name=AGENTS_WORK))
         labeled = seed_evaluations(connection)
     return {
         "claims": len(claim_rows),
