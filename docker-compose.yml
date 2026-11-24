@@ -1,4 +1,4 @@
-# UnderCover auf Coolify: Backend, Agent-Service, Context Layer und Dashboard.
+# Synergy MTC Agent auf Coolify: Backend, Agent, Copilot, Context Layer und Dashboard.
 # Die Werte ${...} trägst du in Coolify unter "Environment Variables" ein.
 services:
   backend:
@@ -13,7 +13,8 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
-      UNDERCOVER_AGENT: http://agent:8002
+      UNDERCOVER_AGENT: http://agent:8080
+      UNDERCOVER_COPILOT: http://copilot:8081
       UNDERCOVER_API_KEY: ${UNDERCOVER_API_KEY}
     restart: unless-stopped
 
@@ -21,7 +22,7 @@ services:
     build:
       context: .
       dockerfile: deploy/python.Dockerfile
-    command: uvicorn agent.service:app --host 0.0.0.0 --port 8002
+    command: uvicorn agent.entrypoint:app --host 0.0.0.0 --port 8080
     environment:
       DATABASE_URL: ${DATABASE_URL}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
@@ -31,6 +32,26 @@ services:
       UNDERCOVER_API: http://backend:8000
       UNDERCOVER_API_KEY: ${UNDERCOVER_API_KEY}
       # Kein Gateway gesetzt: der Agent nutzt den Direct-Modus mit dem Context Layer
+      UNDERCOVER_CONTEXT: http://context:8006/mcp
+    depends_on:
+      - backend
+      - context
+    restart: unless-stopped
+
+  copilot:
+    # Chat-Seitenleiste im Dashboard. Bekommt bewusst keinen UNDERCOVER_API_KEY:
+    # er handelt nur mit der Anmeldung des Sachbearbeiters.
+    build:
+      context: .
+      dockerfile: deploy/python.Dockerfile
+    command: uvicorn agent.copilot.entrypoint:app --host 0.0.0.0 --port 8081
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL}
+      UNDERCOVER_API: http://backend:8000
       UNDERCOVER_CONTEXT: http://context:8006/mcp
     depends_on:
       - backend
