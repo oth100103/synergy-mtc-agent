@@ -19,5 +19,12 @@
     "role": "Claims Handler",
     "email": "priya.raman@undercover.example",
     "can_approve_over_limit": false
+  },
+  {
+    "handler_id": "HND-04",
+    "name": "Sarah Miller",
+    "role": "Claims Manager",
+    "email": "demo@synergy-mtc.com",
+    "can_approve_over_limit": true
   }
 ]
